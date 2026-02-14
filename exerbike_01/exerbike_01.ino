@@ -2,15 +2,26 @@
 
 #include <assert.h>
 
-#include <AD5254_asukiaaa.h>
-#include <Adafruit_MCP4725.h>
+#include <Adafruit_MCP4728.h>
+#include <Wire.h>
+
+Adafruit_MCP4728 mcp;
+
+// Steering stuff ==================================
+// The arduino controls a DAC using i2c
+
+// Adafruit_MCP4725 steeringDAC;
+// int STEER_SIG_PIN = A2;
+MCP4728_channel_t MCP4728_steerChan = MCP4728_CHANNEL_B;
+int STEER_SIG_PIN = A2;
 
 // Throttle stuff ===============================
 // The arduino controls a variable resistor  AD5254 using i2c
-AD5254_asukiaaa throttleResistor(AD5254_ASUKIAAA_ADDR_A0_GND_A1_GND);
+// AD5254_asukiaaa throttleResistor(AD5254_ASUKIAAA_ADDR_A0_GND_A1_GND);
+MCP4728_channel_t MCP4728_throttleChan = MCP4728_CHANNEL_A;
 
 
-uint8_t throttleResistorDigitalPotChan = 0;
+// uint8_t throttleResistorDigitalPotChan = 0;
 
 int THROTTLE_CRANK_SIG_PIN = A3;
 
@@ -26,12 +37,6 @@ int CircBuff_numInBuffer = 0;
 int CircBuff_bufferLastIndex = -1;
 const int CircBuff_bufferSize = 3;
 unsigned long CircBuff_sampleTimes_ms[CircBuff_bufferSize];
-
-// Steering stuff ==================================
-// The arduino controls a DAC using i2c
-
-Adafruit_MCP4725 steeringDAC;
-int STEER_SIG_PIN = A2;
 
 // Throttle Circular buffer functions =======================
 void CircBuff_InitCircularBuffer()
@@ -143,61 +148,55 @@ float MapPedalHzToThrottle01(float pedalSpeedHz)
 float DoConvertPedalSampsToThrottleAndWriteToController()
 {
     float pedalSpeedHz = ConvertSamplesToPedalSpeed_hz();
+    /*
+    if (frameCount % 100 == 0)
+    {
+      Serial.println("");
+      Serial.print("pedal speed  ");
+      Serial.print(pedalSpeedHz);
+    }
+    */
     float throttle01 = MapPedalHzToThrottle01(pedalSpeedHz);
     writeThrottle(throttle01);
+    if (frameCount % 100 == 0)
+    {
+      Serial.print("   throttle01  ");
+      Serial.print(throttle01);
+    }
     return throttle01;
 }
 
 void writeThrottle(float thVal_0_1)
 {
-  /*
-  2% pressed   resistor should be 540 ohms
-  25% pressed  resistor should be 440 ohms
-  75% pressed  resistor should be 220 ohms
-  100% pressed resistor should be 10 ohms
-  */
-  // First lerp to use a sub interval of 0..1 since we want resistance in range 10 .. 600
-  // instead of 0 .. 1000. Also flip the direction
-  float a = 500.0 / 1000.0;
-  float b = 60.0 / 1000.0;
-  float subrange_0_1 = a + (b - a) * thVal_0_1;  // lerp
-  subrange_0_1 = 1.0 - subrange_0_1;
+  // Clamp input for safety
+  thVal_0_1 = constrain(thVal_0_1, 0.0f, 1.0f);
 
-  // lerp again to map subrange_0_1 to a wiper position on the digital potentiometer.
-  a = 0;
-  b = 255; 
-  int tmp = a + (b - a) *  subrange_0_1;
-  uint8_t dpStep_0_255 = (uint8_t) tmp;
-  /*
-  Serial.print("Writing resistor value: ");
-  Serial.print(thVal_0_1);
-  Serial.print("    "); 
-  Serial.print(subrange_0_1);
-  Serial.print("    ");   
-  Serial.print(tmp);
-  Serial.print("    ");
-  Serial.println(dpStep_0_255);
-  delay(1);
-  */
-  uint8_t errorCode;
+  const float vMin = 1.33f;   // no throttle
+  const float vMax = 0.2f;    // full throttle
+  const float dacMax = 4095.0f;
+  const float vRef = 5.0f;
 
-/*
-  Serial.print("writing throttle step: ");
-  Serial.print(thVal_0_1);
-  Serial.print("   subrange_0_1: ");
-  Serial.println(subrange_0_1);
-*/
+  // Convert voltage endpoints to DAC steps
+  float stepMin = (vMin / vRef) * dacMax;
+  float stepMax = (vMax / vRef) * dacMax;
 
-  errorCode = throttleResistor.writeRDAC(throttleResistorDigitalPotChan, dpStep_0_255);
-  if (errorCode == (uint8_t) 0) 
+  // Linear interpolation
+  float outFloat = stepMin + (stepMax - stepMin) * thVal_0_1;
+
+  uint16_t out = (uint16_t)round(outFloat);
+
+  if (frameCount % 100 == 0)
   {
-    return;
+    float outVolts = (out / dacMax) * vRef;
+    Serial.print("Throttle volts: ");
+    Serial.print(outVolts);
+    Serial.print("  step: ");
+    Serial.println(out);
   }
-  
-  int ec = errorCode;
-  Serial.print("Write throttle failed ");
-  Serial.println(ec);
+
+  mcp.setChannelValue(MCP4728_throttleChan, out);
 }
+
 
 float SteerMapRawToNeg1To1(float valRaw01)
 {
@@ -231,7 +230,9 @@ void setSteering(float steer_neg1_1)
   Serial.print("  sVolts_0_3: ");
   Serial.println(sVolts_0_3);
   */
-  steeringDAC.setVoltage(steerVal_0_4096, false);
+  // steeringDAC.setVoltage(steerVal_0_4096, false);
+  // mcp.setChannelValue(MCP4728_steerChan, steerVal_0_4096);
+  
 }
 
 void setup() 
@@ -242,45 +243,24 @@ void setup()
   CircBuff_InitCircularBuffer();
   isCrankSigOn = false;
   crankSigNumTicsOn = 0;
-  throttleResistor.begin();
-  steeringDAC.begin(0x61);  // 0x61
+
+
+  // throttleResistor.begin();
+  // steeringDAC.begin(0x61);  // 0x61
+  if (!mcp.begin()) {
+    Serial.println("Failed to find MCP4728 chip");
+    while (1) {
+      delay(10);
+    }
+  }
+
   Serial.println("Done  Setup .");
 }
 
 void loop() 
 { 
-  /*
-  Serial.println("============="); 
-  Serial.println("A");
-  writeThrottle(0);
-  setSteering(-1);
-  Serial.println("aaa");
-  delay(5000);
 
-  Serial.println("B");
-  writeThrottle(.25f);
-  setSteering(-.5);
-  Serial.println("aaa");
-  delay(5000);
-
-  Serial.println("C");
-  writeThrottle(0.5);
-  setSteering(0);
-  Serial.println("bbbb");
-  delay(5000);  
-
-  Serial.println("D");
-  writeThrottle(.75f);
-  setSteering(.5);
-  Serial.println("aaa");
-  delay(5000);
-
-  Serial.println("E");
-  writeThrottle(1.0);
-  setSteering(1.0);
-  Serial.println("ccc");
-  delay(5000);
-  */   
+   
 
 
   {
@@ -309,8 +289,8 @@ void loop()
       {
         // signal ended
         isCrankSigOn = false;
-        Serial.print(" signal ended  numtics: ");
-        Serial.println(crankSigNumTicsOn);
+        //Serial.print(" signal ended  numtics: ");
+        //Serial.println(crankSigNumTicsOn);
       }
       else
       {
@@ -320,7 +300,7 @@ void loop()
     {
       if (sigPinVoltage01 < 0.5)
       {
-        Serial.print("Throttle starting tick: ");
+        //Serial.print("Throttle starting tick: ");
         isCrankSigOn = true;
         crankSigNumTicsOn = 0;
         isThrottleSampThisTick = true;
@@ -335,7 +315,7 @@ void loop()
     }
     
     // If there is a long pause then we should purge the samples in the circular buffer.
-    if (CircBuff_RemoveOldSamples(newTm) > 0) Serial.println("Removed some old samples.");
+    //if (CircBuff_RemoveOldSamples(newTm) > 0) Serial.println("Removed some old samples.");
     db_throttle01 = DoConvertPedalSampsToThrottleAndWriteToController();
   }
 
@@ -363,6 +343,7 @@ void loop()
   {
     frameCount++;
     if (frameCount >  2100000000) frameCount = 0;
+    /*
     if (frameCount % 100 == 0)
     {
       Serial.print("  throttle: ");
@@ -373,6 +354,7 @@ void loop()
       Serial.print(valRaw01);
       Serial.println("  Loop");
     } 
+    */
   }
 
   delay(10); // 100 loops per second.
