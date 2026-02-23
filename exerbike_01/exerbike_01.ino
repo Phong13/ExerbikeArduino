@@ -137,7 +137,7 @@ float ConvertSamplesToPedalSpeed_hz()
 float MapPedalHzToThrottle01(float pedalSpeedHz)
 {
     float minPedalSpeedHz = 0.0;
-    float maxPedalSpeedHz = 1.9;
+    float maxPedalSpeedHz = 1.65;
     if (pedalSpeedHz < minPedalSpeedHz) pedalSpeedHz = minPedalSpeedHz;
     if (pedalSpeedHz > maxPedalSpeedHz) pedalSpeedHz = maxPedalSpeedHz;
     float throttle01 = (pedalSpeedHz - minPedalSpeedHz) / (maxPedalSpeedHz - minPedalSpeedHz);
@@ -157,6 +157,19 @@ float DoConvertPedalSampsToThrottleAndWriteToController()
     }
     */
     float throttle01 = MapPedalHzToThrottle01(pedalSpeedHz);
+
+/*
+    // Faster decay than rise
+    float riseRate  = 0.05f;   // increase per loop
+    float decayRate = 0.15f;   // decrease per loop (3x faster)
+
+    if (targetThrottle > db_throttle01)
+        db_throttle01 += riseRate;
+    else
+        db_throttle01 -= decayRate;
+
+    db_throttle01 = constrain(db_throttle01, 0.0f, 1.0f);
+*/
     writeThrottle(throttle01);
     if (frameCount % 100 == 0)
     {
