@@ -89,7 +89,7 @@ void ISR_crankA()
     if (evtCount < EVT_BUF_SZ)
     {
         evtTimes[evtHead] = t;
-        evtSensor[evtHead] = 0;   // A
+        evtSensor[evtHead] = 0;
         evtHead = (evtHead + 1) % EVT_BUF_SZ;
         evtCount++;
     }
@@ -102,7 +102,7 @@ void ISR_crankB()
     if (evtCount < EVT_BUF_SZ)
     {
         evtTimes[evtHead] = t;
-        evtSensor[evtHead] = 1;   // B
+        evtSensor[evtHead] = 1;
         evtHead = (evtHead + 1) % EVT_BUF_SZ;
         evtCount++;
     }
@@ -119,6 +119,15 @@ float ConvertSamplesToPedalSpeed_hz()
         return 0.0f;
 
     unsigned long now = micros();
+    unsigned long timeSinceLast = now - CircBuff_GetSample(0);
+
+    const unsigned long STOP_TIMEOUT_US = 2500000UL; // 2.5 s
+
+    if (timeSinceLast > STOP_TIMEOUT_US)
+    {
+        CircBuff_Init();
+        return 0.0f;
+    }
 
     float aveHalfPeriod_us = 0.0f;
     int count = 0;
@@ -139,13 +148,6 @@ float ConvertSamplesToPedalSpeed_hz()
         aveHalfPeriod_us /= count;
     else
         aveHalfPeriod_us = 500000.0f;
-
-    unsigned long timeSinceLast = now - CircBuff_GetSample(0);
-
-    // NEW: hard timeout if pedaling stopped
-    const unsigned long STOP_TIMEOUT_US = 2500000UL;  // 2.5 seconds
-    if (timeSinceLast > STOP_TIMEOUT_US)
-        return 0.0f;
 
     float effectiveHalfPeriod = max((float)timeSinceLast, aveHalfPeriod_us);
 
@@ -229,10 +231,8 @@ void setup()
     pinMode(CRANK_A_PIN, INPUT_PULLUP);
     pinMode(CRANK_B_PIN, INPUT_PULLUP);
 
-    // attachInterrupt(digitalPinToInterrupt(CRANK_A_PIN), ISR_crankA, FALLING);
-    // attachInterrupt(digitalPinToInterrupt(CRANK_B_PIN), ISR_crankB, FALLING);
     attachInterrupt(digitalPinToInterrupt(CRANK_A_PIN), ISR_crankA, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(CRANK_B_PIN), ISR_crankB, CHANGE);   
+    attachInterrupt(digitalPinToInterrupt(CRANK_B_PIN), ISR_crankB, CHANGE);
 
     if (!mcp.begin())
     {
@@ -243,12 +243,6 @@ void setup()
     CircBuff_Init();
 
     Serial.println("Dual Hall Cadence System Ready.");
-
-Serial.print("INT A = ");
-Serial.println(digitalPinToInterrupt(CRANK_A_PIN));
-
-Serial.print("INT B = ");
-Serial.println(digitalPinToInterrupt(CRANK_B_PIN));    
 }
 
 
@@ -284,12 +278,22 @@ void loop()
             unsigned long lastTime = CircBuff_GetSample(0);
             uint8_t lastSensor = CircBuff_GetSensor(0);
 
-            if (sensor == lastSensor)
-                continue;
+            unsigned long dt = t - lastTime;
 
-            // reduced glitch window to 20ms
-            if ((t - lastTime) < 20000UL)
-                continue;
+            const unsigned long RESTART_RESET_US = 1500000UL;
+
+            if (dt > RESTART_RESET_US)
+            {
+                CircBuff_Init();
+            }
+            else
+            {
+                if (sensor == lastSensor)
+                    continue;
+
+                if (dt < 20000UL)
+                    continue;
+            }
         }
 
         CircBuff_AddSample(t, sensor);
