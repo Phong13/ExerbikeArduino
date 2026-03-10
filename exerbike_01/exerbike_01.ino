@@ -142,6 +142,11 @@ float ConvertSamplesToPedalSpeed_hz()
 
     unsigned long timeSinceLast = now - CircBuff_GetSample(0);
 
+    // NEW: hard timeout if pedaling stopped
+    const unsigned long STOP_TIMEOUT_US = 2500000UL;  // 2.5 seconds
+    if (timeSinceLast > STOP_TIMEOUT_US)
+        return 0.0f;
+
     float effectiveHalfPeriod = max((float)timeSinceLast, aveHalfPeriod_us);
 
     float hz = 1000000.0f / (2.0f * effectiveHalfPeriod);
@@ -157,7 +162,7 @@ float ConvertSamplesToPedalSpeed_hz()
 float MapPedalHzToThrottle01(float pedalHz)
 {
     float minHz = 0.0f;
-    float maxHz = 1.2f;
+    float maxHz = 1.65f;
 
     pedalHz = constrain(pedalHz, minHz, maxHz);
 
